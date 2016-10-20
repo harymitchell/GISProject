@@ -1,0 +1,9 @@
+extends layout
+
+block content
+  h1= title
+  p Welcome to #{title}
+  form
+    input(type='file',id='fileinput')
+    input(type='button',id='interpolate',value='Interpolate')
+    div(id='warn')
