@@ -27,6 +27,9 @@
  */
 function InverseDistanceWeighting () {
     
+    // cache for nearest neighbor process
+    var neighborCache = {};
+    
     /**
      * http://stackoverflow.com/questions/8619879/javascript-calculate-the-day-of-the-year-1-366
      */
@@ -144,33 +147,52 @@ function InverseDistanceWeighting () {
      * 3) Return the top k results.
      * 
      */
-    var nearestNeighbors = function(x,y,t,k,points){
-        //console.log ("calculate neighbors"+x,y,k)
-        
-        var result = []; // {id: d}
-        
-        // calculate all euclideanDistance(p1,p2,q1,q2) and isTimeValid.
-        Object.keys(points).forEach(function(key) {
-            var p = points[key];
-            result.push({
-                            id: p.id,
-                            d: euclideanDistance(x, y,p.x, p.y),
-                            measurements: p.measurements,
-                            isTimeValid: factorTimeForNeighbors && t >= p.measurements[0].normalized && t <= p.measurements[p.measurements.length-1].normalized
-                        })
-        });
-            
-        // Sort with custom sort algorithm 
-        var sorter = new QuickSort (isLessThanOrEqualCustom);
-        sorter.sort(result);
-        
-        // logging for debug
-        //result.forEach(function(e){
-        //   console.log (e.id, e.d, e.isTimeValid, normalizedTimeForMeasurement(e.measurements[0]), normalizedTimeForMeasurement(e.measurements[e.measurements.length-1])); 
-        //});
-        
-        // return top k
-        return result.slice(0,k)
+    var nearestNeighbors = function(x,y,t,k,points){        
+        var cacheKey = x+","+y;
+        var cachedNeighbors = neighborCache[cacheKey]; // will be a list of all points sorted by euclidean distance only.
+                        
+        if (cachedNeighbors && factorTimeForNeighbors) {
+            //console.log ("1st calculate neighbors",k, cacheKey, cachedNeighbors? cachedNeighbors.length : null)
+            // must find neighbors in cache and discard those where the time wasn't sampled for t
+            var result = [];
+            var p, i = 0;
+            while (result.length < k) {
+                p = cachedNeighbors[i]; 
+                if (t >= p.measurements[0].normalized && t <= p.measurements[p.measurements.length-1].normalized) {
+                    //console.log ("pushing",t,p.measurements[0].normalized,p.measurements[p.measurements.length-1].normalized)
+                    result.push(p);
+                } else {
+                    //console.log ("ignoring",t,p.measurements[0].normalized,p.measurements[p.measurements.length-1].normalized)
+                }
+                i++;
+            }
+            //console.log (JSON.stringify(result.map (function(m){return {id: m.id, d: m.d}})))
+            return result.slice(0,k);
+        } else if (cachedNeighbors) {
+            //console.log ("2nd calculate neighbors",k, cacheKey, cachedNeighbors? cachedNeighbors.length : null)
+            // easy, just return first k neighbors in cache (disregarding time)
+            return cachedNeighbors.slice(0,k)
+        } else {
+            //console.log ("3rd calculate neighbors",k, cacheKey, cachedNeighbors? cachedNeighbors.length : null)
+            // must build the neighbor cache entry for cacheKey, then recurse
+            var neighbors = [];
+            Object.keys(points).forEach(function(key) {
+                var p = points[key];
+                neighbors.push({
+                                id: p.id,
+                                d: euclideanDistance(x, y,p.x, p.y),
+                                measurements: p.measurements
+                            })
+            });
+            // Sort with custom sort algorithm 
+            var sorter = new QuickSort (isLessThanOrEqualDistance);
+            sorter.sort(neighbors);
+            // add neighbors to neighborCache at cacheKey
+            neighborCache[cacheKey] = neighbors;
+            //console.log ("neihgbors",JSON.stringify(neighbors.slice(0,k).map (function(m){return m.d})))//{id: m.id, d: m.d}})))
+            // now when we recurse, we will have a cachedNeighbors entry
+            return nearestNeighbors(x,y,t,k,points);
+        }
     };
     
     /**
@@ -296,7 +318,7 @@ function InverseDistanceWeighting () {
         //console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 4, day: 10}), 6, 3, points));
         //console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 7, day: 20}), 6, 3, points));
         //console.log ("\n"+idw(-120, 30, normalizedTimeForMeasurement({year: 2009, month: 12, day: 10}), 6, 3, points));
-        
+            
         // Asynchronously interpolate
         var results = [];
         var measurements = [];
@@ -424,6 +446,20 @@ function InverseDistanceWeighting () {
     };    
     
     /**
+     * Sort logic: is a less than b?
+     * We consider only distance d 
+     */
+    var isLessThanOrEqualDistance= function(a, b){
+        if (a.d < b.d) {
+            return true;
+        }
+        if (a.d > b.d) {
+            return false;
+        }
+        return true; // equal
+    };    
+    
+    /**
      * Interpolate from given file path
      * 
      */
@@ -453,7 +489,7 @@ if (require.main === module) {
     var inputFilePath = path.join(__dirname, 'pm25_2009_measured.txt');
     var inputLocationPath = path.join(__dirname, 'county_xy.txt');
     var inverseDistanceWeighting = new InverseDistanceWeighting();
-    inverseDistanceWeighting.interpolateFromFilePath(6,3,"out",inputFilePath, inputLocationPath, "Year Month Day");
+    inverseDistanceWeighting.interpolateFromFilePath(6,3,"out.txt",inputFilePath, inputLocationPath, "Year Month Day");
 }
 
 /**
@@ -502,6 +538,40 @@ if (require.main === module) {
        }
     });
     console.log(results);
+ *
+ *
+ *
+ *
+        //////////////////////////////////////// idw Pre-cache version: ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        //
+        //console.log ("calculate neighbors"+x,y,k)
+        
+        //var result = []; // {id: d}
+        //
+        //// calculate all euclideanDistance(p1,p2,q1,q2) and isTimeValid.
+        //Object.keys(points).forEach(function(key) {
+        //    var p = points[key];
+        //    result.push({
+        //                    id: p.id,
+        //                    d: euclideanDistance(x, y,p.x, p.y),
+        //                    measurements: p.measurements,
+        //                    isTimeValid: factorTimeForNeighbors && t >= p.measurements[0].normalized && t <= p.measurements[p.measurements.length-1].normalized
+        //                })
+        //});
+        //    
+        //// Sort with custom sort algorithm 
+        //var sorter = new QuickSort (isLessThanOrEqualCustom);
+        //sorter.sort(result);
+        //
+        //// logging for debug
+        ////result.forEach(function(e){
+        ////   console.log (e.id, e.d, e.isTimeValid, normalizedTimeForMeasurement(e.measurements[0]), normalizedTimeForMeasurement(e.measurements[e.measurements.length-1])); 
+        ////});
+        //
+        //// return top k
+        //console.log ("neighbors",JSON.stringify(result.slice(0,k).map (function(m){return {id: m.id, d: m.d}})))
+        //return result.slice(0,k)
+ *
  *
  *
  *
