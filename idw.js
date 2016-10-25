@@ -8,6 +8,7 @@
  *  year
  *  month
  *  day
+ *  normalized
  *
  * Point ::=
  *  id
@@ -20,19 +21,41 @@
  *  isTimeValid
  *  d
  *
+ *
+ *  NOTE: Profiling: https://nodejs.org/en/docs/guides/simple-profiling/
+ *
  */
-function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) {
+function InverseDistanceWeighting () {
+    
+    /**
+     * http://stackoverflow.com/questions/8619879/javascript-calculate-the-day-of-the-year-1-366
+     */
+    Date.prototype.isLeapYear = function() {
+        var year = this.getFullYear();
+        if((year & 3) != 0) return false;
+        return ((year % 100) != 0 || (year % 400) == 0);
+    };
+
+    // Get Day of Year
+    Date.prototype.getDOY = function() {
+        var dayCount = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+        var mn = this.getMonth();
+        var dn = this.getDate();
+        var dayOfYear = dayCount[mn] + dn;
+        if(mn > 1 && this.isLeapYear()) dayOfYear++;
+        return dayOfYear;
+    };
     
     // Node modules
     var fs = require('fs');
     var math = require('math');
-        
-    var points = {};
-    
+    var each = require ('async/each');
+            
     // Default constant settings
-    if (!timeDomain) timeDomain = "DAY"; //time domain is day, month, or year
-    if (!delimeter) delimeter = '\t'
-    if (!factorTimeForNeighbors) factorTimeForNeighbors = true; // should time be in between a valid neighbor's t1 and t2?
+    var timeDomain = "year month day"; //time domain is day, month, or year
+    var delimeter = '\t'
+    var factorTimeForNeighbors = true; // should time be in between a valid neighbor's t1 and t2?
+    var epochTimeScale = 3.17098e-13;
     
     /**
      * Returns the 2D Euclidean Distance for provided points.
@@ -51,19 +74,43 @@ function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) 
      * there are three possible time domains: (year), (year, month), and (year, month, day),
      * where year, month, and day are all integers with month∈[1, 12] and day∈[1, 31].
      * 
-     * TODO: find better time value than epoch time
+     * TODO: find better time value than epoch time converted to centuries (epoch*3.17098e-13)
      */
     var normalizedTimeForMeasurement = function(measurement){
         var result;
-        if (timeDomain=="DAY") {
-            result = new Date(measurement.year, measurement.month, measurement.day).getTime()*3.17098e-13;
-        } else {
-            // TODO: implement other timeDomains
+        switch (timeDomain){
+            case "Year Month Day":
+                result = new Date(measurement.year, measurement.month-1, measurement.day).getDOY()//.getTime()*epochTimeScale;
+                break;
+            case "Year Month":
+                result = new Date(measurement.year, measurement.month-1).getTime().getDOY();
+                break;
+            case "Year":
+                result = new Date(measurement.year).getTime().getDOY();
+                break;
+            default:
+                console.error("Invalid time Domain: "+timeDomain);
+                console.error("Dafaulting to year");
+                result = new Date(measurement.year).getTime().getDOY();
         }
         //console.log (measurement, result)
         return result;
     }
      
+    /**
+     * Reads data from filePath and calls the provided callback on the data.
+     */
+    var readDataAndExecute = function (filePath,callback){
+        fs.readFile(filePath, {encoding: 'utf-8'}, function(err,data){
+            if (!err){
+                callback(data);
+            }else{
+                console.error(err);
+            }
+        });
+    };
+    this.readDataAndExecute = readDataAndExecute;
+    
     /**
      * Returns a new point object for given list
      */
@@ -84,7 +131,8 @@ function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) 
                     pm25: line[6],
                     year: line[1],
                     month: line[2],
-                    day: line[3]
+                    day: line[3],
+                    normalized: normalizedTimeForMeasurement ({year: line[1], month: line[2], day: line[3]})
                 };
     };
         
@@ -108,29 +156,13 @@ function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) 
                             id: p.id,
                             d: euclideanDistance(x, y,p.x, p.y),
                             measurements: p.measurements,
-                            isTimeValid: factorTimeForNeighbors && t >= normalizedTimeForMeasurement(p.measurements[0]) && t <= normalizedTimeForMeasurement(p.measurements[p.measurements.length-1])
-                        }) 
+                            isTimeValid: factorTimeForNeighbors && t >= p.measurements[0].normalized && t <= p.measurements[p.measurements.length-1].normalized
+                        })
         });
-        
-        // custom sort list of d
-        result.sort(function(a,b){
-            if (factorTimeForNeighbors) {
-                if (a.isTimeValid && b.isTimeValid) {
-                    // pass
-                } else if (a.isTimeValid) {
-                    return -1;
-                } else {
-                    return 1;
-                }
-            }
-            if (a.d < b.d) {
-                return -1;
-            }
-            if (a.d > b.d) {
-                return 1;
-            }
-            return 0; 
-        });
+            
+        // Sort with custom sort algorithm 
+        var sorter = new QuickSort (isLessThanOrEqualCustom);
+        sorter.sort(result);
         
         // logging for debug
         //result.forEach(function(e){
@@ -163,8 +195,8 @@ function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) 
      */
     var interpolatedValue = function(t,neighbor){
         var measurementsLength = neighbor.measurements.length;
-        var ti2 = normalizedTimeForMeasurement(neighbor.measurements[measurementsLength-1]);
-        var ti1 = normalizedTimeForMeasurement(neighbor.measurements[0]);
+        var ti2 = neighbor.measurements[measurementsLength-1].normalized;
+        var ti1 = neighbor.measurements[0].normalized;
         var wi2 = neighbor.measurements[measurementsLength-1].pm25;
         var wi1 = neighbor.measurements[0].pm25;
         var result = (( (ti2 - t) / (ti2 - ti1) )*wi1) + (( (t - ti1) / (ti2 - ti1) )*wi2);
@@ -195,63 +227,221 @@ function InverseDistanceWeighting (timeDomain,delimeter,factorTimeForNeighbors) 
     };
     
     /**
-     * Callback to handle data read from file.
-     * TODO: let's make this cleaner with Promises :)
+     * Takes raw data input and returns points object.
+     * 
+     * An input data set is assumed to have the format of (id, [time], x, y, measurement),
+     *  which records a set of measured values at location (x, y) and a time instance.
      */
-    var handleData = function(data){
+    var inputPointsForData = function(data){
+        var result = {};
         var list = data.split("\r\n") // splits on carriage returns
         list.forEach(function(e){
             var split = e.split(delimeter); // input file is delemited
             var pointId = split[0];
-            var currentPoint = points[pointId];
+            var currentPoint = result[pointId];
             if (currentPoint) {
                 // if we already have a value for pointId in points, add the new measurement
                 currentPoint.measurements.push (newMeasurementForLine(split));
             } else if (pointId != '' && pointId != 'id') {
                 // New point entry
-                points[pointId]=newPointForLine(split);   
+                result[pointId]=newPointForLine(split);   
             }        
         });
+        return result;
+    };
+    
+    /**
+     * Takes raw locations data input and returns locations object.
+     * 
+     * The data set is assumed to have the format of (id, x, y) with id as integers and x & y as floating point numbers.
+     */
+    var locationsForData = function(data){
+        var result = {};
+        var list = data.split("\r\n") // splits on carriage returns
+        list.forEach(function(e){
+            var split = e.split(delimeter); // input file is delemited
+            result[split[0]] = {
+                            id: split[0],
+                            x:  split[1],
+                            y:  split[2]
+                        };
+        });
+        return result;
+    };
+    
+    /**
+     * Interpolate from given object containing raw String data and settings:
+     *
+     *   {
+     *       k: k neighbors,
+     *       p: p power,
+     *       t: timeDomain,
+     *       n: n filename
+     *       dataset: raw data
+     *       locations: locations to interpolate in dataset
+     *   }
+     *
+     */
+    this.interpolateFromData = function(obj){
+        var start = new Date();
+        
+        timeDomain = obj.t;
+        
+        // calculate a points obj from inputted dataset
+        var points = inputPointsForData(obj.dataset);
+        
+        // calculate a locations obj from inputted dataset
+        var locations = locationsForData(obj.locations);
+        
+        //console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 4, day: 10}), 6, 3, points));
+        //console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 7, day: 20}), 6, 3, points));
+        //console.log ("\n"+idw(-120, 30, normalizedTimeForMeasurement({year: 2009, month: 12, day: 10}), 6, 3, points));
+        
+        // Asynchronously interpolate
+        var results = [];
+        var measurements = [];
+        var date = new Date(2009,0,1);
+        console.log ("building measurements list");
+        for (i=0;i<365;i++){
+            measurements.push ({
+                                normalized: normalizedTimeForMeasurement({year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate()}),
+                                year: date.getFullYear(),
+                                month: date.getMonth()+1,
+                                day: date.getDate()
+                               });
+            date.setDate(date.getDate()+1)
+        }
+        console.log ("iternating locations");
+        each(Object.keys(locations), function(locID, callback) {
+            if (locID && locID != 'id') {
+                var value, loc, i, date;
+                loc = locations[locID];
+                each(measurements, function(measurement){            
+                    value = idw(loc.x, loc.y, measurement.normalized, obj.k, obj.p, points);
+                    //console.log ([locID, measurement.year, measurement.month, measurement.day, loc.x, loc.y, value]) // debug
+                    results.push ([locID, measurement.year, measurement.month, measurement.day, loc.x, loc.y, value])
+                }, function(err){
+                    if( err ) {
+                        console.log('A meansurement failed to process');
+                    } else {
+                        console.log ('A location is complete',locID);
+                    }
+                });
+            }
+        }, function(err) {
+            if( err ) {
+                console.log('A location failed to process');
+            } else {
+                console.log('All locations have been processed successfully');
+                console.log (results);
+            }
+        });
+        console.log ("done interpolating",results.length);
+        var end = new Date();
+        var diffMs = (end - start);
+        var diffMins = Math.round(((diffMs % 86400000) % 3600000) / 60000); // minutes
+        console.log ("done interpolating "+ results.length+" records, in "+diffMins+"mins");
+        
+        var resultString = "";
+        results.forEach(function(res){
+            resultString += res+"\n";
+        })
+        
+        fs.writeFile(obj.n, resultString, function(err) {
+            if(err) {
+                return console.log(err);
+            }
+        }); 
         
         // TODO: turn these into tests
         //console.log (JSON.stringify(points["10030010"].measurements[9]));
         //console.log (Object.keys(points))
-        //console.log (nearestNeighbors(-85, 30, 6, points));
-        console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 4, day: 10}), 6, 3, points));
-        console.log ("\n"+idw(-85, 30, normalizedTimeForMeasurement({year: 2009, month: 7, day: 20}), 6, 3, points));
-        console.log ("\n"+idw(-120, 30, normalizedTimeForMeasurement({year: 2009, month: 12, day: 10}), 6, 3, points));
-    };
-    
-    /**
-     * Reads data from filePath and calls the provided callback on the data.
-     */
-    var readDataAndExecute = function (filePath,callback){
-        fs.readFile(filePath, {encoding: 'utf-8'}, function(err,data){
-            if (!err){
-                callback(data);
-            }else{
-                console.error(err);
-            }
-        });
-    };
-    
-    /**
-     * Interpolate from given raw String data.
-     *
-     */
-    this.interpolateFromData = function(data){
-        handleData(data);
+        //console.log (nearestNeighbors(-85, 30, 6, points));        
     }
+    
+    /*
+     * Sorting algorithm function
+     * http://blog.mgechev.com/2012/11/24/javascript-sorting-performance-quicksort-v8/
+     */
+    var QuickSort = function (isLessThanOrEqual) {
+        
+        function partition(array, left, right) {
+            var cmp = array[right - 1],
+                minEnd = left,
+                maxEnd;
+            for (maxEnd = left; maxEnd < right - 1; maxEnd += 1) {
+                if (isLessThanOrEqual(array[maxEnd], cmp)) {
+                    swap(array, maxEnd, minEnd);
+                    minEnd += 1;
+                }
+            }
+            swap(array, minEnd, right - 1);
+            return minEnd;
+        }
+    
+        function swap(array, i, j) {
+            var temp = array[i];
+            array[i] = array[j];
+            array[j] = temp;
+            return array;
+        }
+    
+        function quickSort(array, left, right) {
+            if (left < right) {
+                var p = partition(array, left, right);
+                quickSort(array, left, p);
+                quickSort(array, p + 1, right);
+            }
+            return array;
+        }
+    
+        this.sort = function (array) {
+            quickSort(array, 0, array.length);
+        };
+    };
+    
+    /**
+     * Custom sort logic: is a less than b?
+     * We consider distance d and isTimeValid
+     */
+    var isLessThanOrEqualCustom = function(a, b){
+        if (factorTimeForNeighbors) {
+            if (a.isTimeValid && b.isTimeValid) {
+                // pass
+            } else if (a.isTimeValid) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+        if (a.d < b.d) {
+            return true;
+        }
+        if (a.d > b.d) {
+            return false;
+        }
+        return true; // equal
+    };    
     
     /**
      * Interpolate from given file path
      * 
-     * TODO: return output STRING or write to file...
      */
-    this.interpolateFromFilePath = function(filePath){
-        readDataAndExecute(filePath,this.interpolateFromData);
+    this.interpolateFromFilePath = function(k,p,n,inputFilePath,locationFilePath,timeDomain){
+        interpolateFromData = this.interpolateFromData;
+        readDataAndExecute(inputFilePath,function(data){
+            readDataAndExecute(locationFilePath,function(locations){
+                interpolateFromData({
+                                        k: k,
+                                        p: p,
+                                        t: timeDomain,
+                                        n: n,
+                                        dataset: data,
+                                        locations: locations
+                                    })
+            });
+        });    
     }
-    
 }
 
 // Exports
@@ -260,7 +450,59 @@ exports.InverseDistanceWeighting = InverseDistanceWeighting;
 // Usage (main)
 if (require.main === module) {
     var path = require('path');
-    var filePath = path.join(__dirname, 'pm25_2009_measured.txt');
+    var inputFilePath = path.join(__dirname, 'pm25_2009_measured.txt');
+    var inputLocationPath = path.join(__dirname, 'county_xy.txt');
     var inverseDistanceWeighting = new InverseDistanceWeighting();
-    inverseDistanceWeighting.interpolateFromFilePath(filePath);
+    inverseDistanceWeighting.interpolateFromFilePath(6,3,"out",inputFilePath, inputLocationPath, "Year Month Day");
 }
+
+/**
+ * NOTES:
+ *                 
+    custom native sort list of d, proved much slower than manual implementation
+    
+    result.sort(function(a,b){
+        if (factorTimeForNeighbors) {
+            if (a.isTimeValid && b.isTimeValid) {
+                // pass
+            } else if (a.isTimeValid) {
+                return -1;
+            } else {
+                return 1;
+            }
+        }
+        if (a.d < b.d) {
+            return -1;
+        }
+        if (a.d > b.d) {
+            return 1;
+        }
+        return 0; 
+    });       
+        
+ *
+ *
+    SYNCHRONOUS, not sure if actually slower
+    
+    iternate locations object and add the interpolated value for each location, based on the points object
+    idw = function(x,y,t,k,p,allPoints)
+    var value, loc, i, date, measurement;
+    var results = [];
+    Object.keys(locations).forEach(function(locID) {
+       loc = locations[locID];
+       date = new Date(2009,0,1);
+       for (i=0;i<365;i++){
+           measurement = normalizedTimeForMeasurement({year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate()})
+           value = idw(loc.x, loc.y, measurement, obj.k, obj.p, points);
+           console.log (loc.x, loc.y, measurement, obj.k, obj.p, value)
+           //console.log ([locID, measurement.year, measurement.month, measurement.day, loc.x, loc.y, value]) // debug
+           results.push ([locID, date.getFullYear(), date.getMonth()+1, date.getDate(), loc.x, loc.y, value])
+           // increment date
+           date.setDate(date.getDate()+1)
+       }
+    });
+    console.log(results);
+ *
+ *
+ *
+ */

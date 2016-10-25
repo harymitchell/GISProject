@@ -2,8 +2,28 @@ extends layout
 
 block content
   h1= title
-  p Welcome to #{title}
-  form
-    input(type='file',id='fileinput')
+  form(id='dataInterpolateForm')
+    p Choose a dataset input file:
+    input(type='file',id='fileinputDataInput')
+    p Choose a locations input file:
+    input(type='file',id='fileinputLocations')
+    p Choose values for power (p), number of neighbors (k), and a data output filename:
+    label P Value: 
+    input(type='number',id='pInput')
+    br
+    label K Value: 
+    input(type='number',id='kInput')
+    br
+    label Output Filename:  
+    input(type='text',id='outputFileNameInterpolateData')
+    br
+    label Time Domain:  
+    input(type='radio',name='timeDomain',value='Year Month Day')
+    label Year Month Day
+    input(type='radio',name='timeDomain',value='Year Month')
+    label Year Month 
+    input(type='radio',name='timeDomain',value='Year')
+    label Year 
+    br
     input(type='button',id='interpolate',value='Interpolate')
     div(id='warn')

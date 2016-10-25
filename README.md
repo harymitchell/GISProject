@@ -19,6 +19,31 @@ You can interpolate from raw data or from file path:
 * interpolateFromData
 * interpolateFromFilePath
 
+There are 3 implied data structures
+
+Measurement ::=
+ *  pm25
+ *  year
+ *  month
+ *  day
+
+Point ::=
+ *  id
+ *  x
+ *  y
+ *  measurements
+ 
+Neighbor ::=
+ *  id
+ *  isTimeValid
+ *  d
+ 
+Issue for discussion: We calculte Neighbor attribute isTimeValid because it is relevant to know whether the range of measurements for
+a given nearest neighbor contains the time value we want to measure.  I do not know if my implementation is just wrong, or if
+this it is inherent in the algorithm, but for the interpolatedValue function (( ti2 - t / ti2 - ti1 )*wi1 + ( t - ti1 / ti2 - ti1 )*wi2;),
+if t is not in between ti1 and ti2, then the result is a negative number, which I think skews the results.  So it is better to choose
+neighbors that are close in distance but also which have relevant time intervals measured. 
+
 The implementation is currnetly unfinished.  The handleData function simply runs a few tests 
 with single points. 
 
@@ -26,6 +51,7 @@ TODO:
 
 * Must accept an input file of points to interpolate.  
 * Must accept an output file name and write the results to file.
+* Implement other timeDomains
 
 ## Express Web App
 
