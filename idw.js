@@ -161,8 +161,6 @@ function InverseDistanceWeighting () {
                 if (t >= p.measurements[0].normalized && t <= p.measurements[p.measurements.length-1].normalized) {
                     //console.log ("pushing",t,p.measurements[0].normalized,p.measurements[p.measurements.length-1].normalized)
                     result.push(p);
-                } else {
-                    //console.log ("ignoring",t,p.measurements[0].normalized,p.measurements[p.measurements.length-1].normalized)
                 }
                 i++;
             }
@@ -323,7 +321,6 @@ function InverseDistanceWeighting () {
         var results = [];
         var measurements = [];
         var date = new Date(2009,0,1);
-        console.log ("building measurements list");
         for (i=0;i<365;i++){
             measurements.push ({
                                 normalized: normalizedTimeForMeasurement({year: date.getFullYear(), month: date.getMonth()+1, day: date.getDate()}),
@@ -333,7 +330,6 @@ function InverseDistanceWeighting () {
                                });
             date.setDate(date.getDate()+1)
         }
-        console.log ("iternating locations");
         each(Object.keys(locations), function(locID, callback) {
             if (locID && locID != 'id') {
                 var value, loc, i, date;
@@ -358,15 +354,17 @@ function InverseDistanceWeighting () {
                 console.log (results);
             }
         });
-        console.log ("done interpolating",results.length);
+        
+        // Benchmark
         var end = new Date();
         var diffMs = (end - start);
         var diffMins = Math.round(((diffMs % 86400000) % 3600000) / 60000); // minutes
-        console.log ("done interpolating "+ results.length+" records, in "+diffMins+"mins");
+        var diffSecs = diffMs*.001; // seconds
+        console.log ("done interpolating "+ results.length+" records, in "+diffMins+" mins and "+diffSecs+" seconds.");
         
-        var resultString = "";
+        var resultString = "id\tyear\tmonth\tday\tx\ty\tvalue\n";
         results.forEach(function(res){
-            resultString += res+"\n";
+            resultString += (res+"\n").replace(new RegExp(',', 'g'), '\t');
         })
         
         fs.writeFile(obj.n, resultString, function(err) {
